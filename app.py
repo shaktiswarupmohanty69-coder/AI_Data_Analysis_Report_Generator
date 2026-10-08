@@ -2,7 +2,9 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from datetime import datetime
+import os
 import ollama
+from openai import OpenAI
 import io
 
 # ============================================================
@@ -281,6 +283,44 @@ section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {
 """)
 
 # ============================================================
+# AI CONFIGURATION HELPERS
+# ============================================================
+
+def get_openai_api_key():
+    """
+    Read the OpenAI API key from Streamlit Secrets first,
+    then from the normal environment variable.
+
+    Streamlit Cloud:
+        Add OPENAI_API_KEY to App Settings -> Secrets.
+
+    Local PC:
+        If no key is configured, the app automatically uses
+        Ollama + Qwen 2.5 7B.
+    """
+
+    try:
+        key = st.secrets.get("OPENAI_API_KEY")
+        if key:
+            return str(key).strip()
+    except Exception:
+        pass
+
+    key = os.getenv("OPENAI_API_KEY")
+    if key:
+        return key.strip()
+
+    return None
+
+
+def get_ai_provider():
+    """Return the AI backend currently configured."""
+    if get_openai_api_key():
+        return "OpenAI Cloud"
+    return "Ollama • Qwen 2.5 7B"
+
+
+# ============================================================
 # SIDEBAR
 # ============================================================
 
@@ -310,7 +350,7 @@ with st.sidebar:
 
     st.divider()
 
-    st.html("""
+    st.html(f"""
     <div style="
         padding:14px;
         border-radius:14px;
@@ -324,7 +364,7 @@ with st.sidebar:
             font-weight:700;
             letter-spacing:1px;
         ">
-            LOCAL AI
+            AI ENGINE
         </div>
         <div style="
             color:#ffffff;
@@ -332,14 +372,14 @@ with st.sidebar:
             font-weight:650;
             margin-top:5px;
         ">
-            Qwen 2.5 • 7B
+            {get_ai_provider()}
         </div>
         <div style="
             color:#7f8aa2;
             font-size:11px;
             margin-top:3px;
         ">
-            Powered by Ollama
+            Automatic local / cloud AI
         </div>
     </div>
     """)
@@ -668,7 +708,64 @@ Write in professional business-report language.
     return prompt
 
 
-def ask_qwen(prompt):
+def ask_ai(prompt):
+    """
+    Automatically choose the AI backend.
+
+    Cloud:
+        OPENAI_API_KEY -> OpenAI Responses API
+
+    Local:
+        No OpenAI key -> Ollama + Qwen 2.5 7B
+    """
+
+    api_key = get_openai_api_key()
+
+    # ========================================================
+    # CLOUD AI: OPENAI
+    # ========================================================
+
+    if api_key:
+
+        try:
+
+            client = OpenAI(api_key=api_key)
+
+            model = os.getenv(
+                "OPENAI_MODEL",
+                "gpt-6-luna"
+            )
+
+            response = client.responses.create(
+                model=model,
+                instructions=(
+                    "You are a professional senior data analyst. "
+                    "Be accurate, concise, evidence-based, and "
+                    "never fabricate information. "
+                    "Use only the information supplied by the user."
+                ),
+                input=prompt
+            )
+
+            result = response.output_text
+
+            if not result or not result.strip():
+                return "ERROR: OpenAI returned an empty analysis."
+
+            return result.strip()
+
+        except Exception as error:
+
+            error_text = str(error)
+
+            return (
+                "ERROR: OpenAI cloud analysis failed. "
+                f"{error_text}"
+            )
+
+    # ========================================================
+    # LOCAL AI: OLLAMA + QWEN 2.5 7B
+    # ========================================================
 
     try:
 
@@ -693,7 +790,12 @@ def ask_qwen(prompt):
             }
         )
 
-        return response["message"]["content"]
+        result = response["message"]["content"]
+
+        if not result or not result.strip():
+            return "ERROR: Ollama returned an empty analysis."
+
+        return result.strip()
 
     except Exception as error:
 
@@ -712,6 +814,12 @@ def ask_qwen(prompt):
             )
 
         return f"ERROR: {error_text}"
+
+
+# Backward-compatible wrapper.
+# Existing parts of the application can continue calling ask_qwen().
+def ask_qwen(prompt):
+    return ask_ai(prompt)
 
 
 def generate_basic_report(df):
@@ -822,7 +930,7 @@ st.html("""
         Transform raw CSV data into meaningful statistics,
         visual analytics, trends, anomaly detection and
         intelligent AI-generated reports using local
-        Qwen 2.5 7B intelligence.
+        Qwen 2.5 7B or secure cloud AI.
     </div>
 
 </div>
@@ -1267,24 +1375,24 @@ elif page == "AI Insights":
 
         st.html("""
         <div class="section-title">
-            Local AI Insights
+            AI Insights
         </div>
 
         <div class="section-subtitle">
-            Analyze your dataset locally using Qwen 2.5 7B through Ollama.
+            Analyze your dataset using the configured AI engine.
         </div>
         """)
 
-        st.html("""
+        st.html(f"""
         <div class="ai-card">
 
             <div class="ai-title">
-                ✦ Qwen 2.5 • Local Intelligence
+                ✦ {get_ai_provider()}
             </div>
 
             <div class="ai-subtitle">
-                Your data is analyzed by the local AI model.
-                No external AI API is required.
+                AI analysis is automatically routed to the configured
+                local Ollama model or cloud AI service.
             </div>
 
         </div>
@@ -1363,7 +1471,7 @@ elif page == "AI Insights":
         ):
 
             with st.spinner(
-                "Qwen 2.5 7B is analyzing your dataset..."
+                f"{get_ai_provider()} is analyzing your dataset..."
             ):
 
                 prompt = build_ai_prompt(df)
@@ -1397,7 +1505,7 @@ elif page == "AI Insights":
                 )
 
                 st.success(
-                    "AI analysis generated successfully using local Qwen 2.5 7B."
+                    f"AI analysis generated successfully using {get_ai_provider()}."
                 )
 
         else:
@@ -1405,7 +1513,7 @@ elif page == "AI Insights":
             st.html("""
             <div class="info-box" style="margin-top:20px;">
                 Click <b>Generate AI Analysis</b> to let
-                Qwen 2.5 7B analyze the uploaded dataset.
+                the configured AI engine analyze the uploaded dataset.
             </div>
             """)
 
@@ -1449,21 +1557,25 @@ elif page == "Report Generator":
 
                 prompt = build_ai_prompt(df)
 
-                ai_result = ask_qwen(prompt)
+                ai_result = ask_ai(prompt)
 
-                complete_report = (
-                    basic_report
-                    + "\n\n"
-                    + "=" * 70
-                    + "\n"
-                    + "AI-GENERATED ANALYSIS"
-                    + "\n"
-                    + "=" * 70
-                    + "\n\n"
-                    + ai_result
-                )
+                if ai_result.startswith("ERROR:"):
+                    st.error(ai_result)
+                    st.session_state.report_text = None
+                else:
+                    complete_report = (
+                        basic_report
+                        + "\n\n"
+                        + "=" * 70
+                        + "\n"
+                        + "AI-GENERATED ANALYSIS"
+                        + "\n"
+                        + "=" * 70
+                        + "\n\n"
+                        + ai_result
+                    )
 
-                st.session_state.report_text = complete_report
+                    st.session_state.report_text = complete_report
 
         if st.session_state.report_text:
 
@@ -1499,7 +1611,7 @@ elif page == "Report Generator":
             st.html("""
             <div class="info-box">
                 Generate a report to combine statistical analysis,
-                anomaly detection, trend detection and local AI insights.
+                anomaly detection, trend detection and AI insights.
             </div>
             """)
 
@@ -1514,7 +1626,7 @@ st.html("""
     </div>
 
     <div style="margin-top:6px;">
-        Python • Pandas • Streamlit • Ollama • Qwen 2.5 7B
+        Python • Pandas • Streamlit • Local Qwen 2.5 7B • Cloud AI
     </div>
 </div>
 """)
